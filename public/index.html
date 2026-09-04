@@ -92,8 +92,11 @@ $("join").onclick=()=>{
   myName=r.name||"Guest";
   $("join").classList.add("hidden");$("room").classList.add("hidden");$("name").classList.add("hidden");
   $("guestView").classList.remove("hidden");
-  guestStatus.textContent="Joined as "+r.name+" — you can preview your camera; the host controls the photos.";
+  guestStatus.textContent="Joined as "+r.name+" — ask the host to click Start Camera so you can see them.";
   if(r.members)r.members.forEach(p=>{ if(!p.host) addPerson($("gpeople"),p.id,p.name,p.host); });
+  // If the host's live video hasn't shown up within 3s, request it again
+  clearTimeout(window.retryCall);
+  window.retryCall=setTimeout(guestRequestReconnect,3000);
  });
 };
 $("gstart").onclick=()=>enableCam($("gcam"),$("gstart"),null,guestStatus,true);
@@ -283,7 +286,19 @@ async function guestAnswer(desc){
   guestStatus.textContent="Live video connecting...";
  }catch(err){guestStatus.textContent="⚠️ Live video error: "+err.message;}
 }
-socket.on("webrtc-offer",p=>{guestAnswer(p&&p.desc)});
+socket.on("webrtc-offer",p=>{
+ guestAnswer(p&&p.desc);
+ clearTimeout(window.retryCall);
+});
+
+// When a guest joins, they may arrive before or after the host started the call.
+// This lets a guest ask the host to (re)start the live video link.
+function guestRequestReconnect(){
+ const v=$("gremote");
+ if(isHost||!v||!v.classList.contains("hidden"))return; // already connected or not a guest
+ socket.emit("guest-request-reconnect",{});
+}
+socket.on("guest-request-reconnect",()=>{ if(isHost&&!rtc.peer)hostMakeCall(); });
 socket.on("webrtc-answer",async p=>{
  if(!rtc.peer||!p||!p.desc)return;
  try{await rtc.peer.setRemoteDescription(p.desc);hostStatus.textContent="Live video connected!";}catch(e){hostStatus.textContent="⚠️ "+e.message;}

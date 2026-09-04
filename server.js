@@ -87,10 +87,16 @@ io.on("connection", socket => {
     if (room) socket.to(room).emit("webrtc-answer", payload);
   });
 
-  socket.on("webrtc-ice", payload => {
+socket.on("webrtc-ice", payload => {
     const room = socket.data.room;
     if (room) socket.to(room).emit("webrtc-ice", payload);
-  });
+   });
+
+   socket.on("guest-request-reconnect", () => {
+    const room = socket.data.room;
+    const data = room && rooms.get(room);
+    if (data && data.host) socket.to(data.host).emit("guest-request-reconnect");
+   });
 
   socket.on("disconnect", () => {
     const room = socket.data.room;
