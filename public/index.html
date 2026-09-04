@@ -195,13 +195,6 @@ function takePhoto(v){
 function showCount(n){$("count").textContent=n;$("count").style.display="flex"}
 function hideCount(){$("count").style.display="none"}
 
-socket.on("participant-joined",p=>{
- addPerson($("people"),p.id,p.name,p.host);
- if($("gpeople"))addPerson($("gpeople"),p.id,p.name,p.host);
- // host initiates the live video call when a guest joins
- if(isHost&&!rtc.peer&&typeof hostMakeCall==="function"){setTimeout(hostMakeCall,300);}
-});
-socket.on("participant-left",p=>{const e=$("p-"+p.id);if(e)e.remove()});
 socket.on("countdown",n=>{showCount(n);clearTimeout(window.ct);window.ct=setTimeout(hideCount,900)});
 
 // GUEST: when the host snapshots, capture and send our camera frame
@@ -225,7 +218,7 @@ socket.on("new-photo",p=>{
 socket.on("room-closed",()=>alert("The host closed the photobooth room."));
 
 // ---------- WebRTC live video (host <-> guest) ----------
-const rtc={peer:null, stream:null};
+const rtc={peer:null, stream:null, pendingICE:[]};
 const rtcConfig={
  iceServers:[
   {urls:"stun:stun.l.google.com:19302"},
@@ -238,11 +231,14 @@ const rtcConfig={
  ]
 };
 
+function cleanupPeer(){
+ if(rtc.peer){try{rtc.peer.close()}catch(e){}rtc.peer=null}
+ rtc.pendingICE=[];
+}
 async function ensureStream(){
  if(rtc.stream&&rtc.stream.active)return rtc.stream;
  const s=await navigator.mediaDevices.getUserMedia({video:true,audio:false});
  rtc.stream=s;
- // also display it in the right local preview
  const local=isHost?$("cam"):$("gcam");
  if(local&&!local.srcObject){local.srcObject=s;local.play().catch(()=>{})}
  return s;
@@ -255,11 +251,11 @@ function iceStatus(){
  const el=isHost?hostStatus:guestStatus;
  if(!el)return;
  if(s==="connected"||s==="completed")el.textContent="📹 Live video connected!";
- else if(s==="failed")el.textContent="⚠️ Could not connect video (network blocked). Trying STUN/TURN...";
+ else if(s==="failed")el.textContent="⚠️ Could not connect video. Retrying...";
  else if(s==="checking"||s==="new")el.textContent="Connecting live video...";
 }
 async function hostMakeCall(){
- if(rtc.peer)return;
+ cleanupPeer();
  const remote=$("hremote");
  try{
   const stream=await ensureStream();
@@ -275,7 +271,7 @@ async function hostMakeCall(){
  }catch(err){hostStatus.textContent="⚠️ Live video error: "+err.message;}
 }
 async function guestAnswer(desc){
- if(rtc.peer)return;
+ cleanupPeer();
  const remote=$("gremote");
  try{
   const stream=await ensureStream();
@@ -285,6 +281,9 @@ async function guestAnswer(desc){
   rtc.peer.ontrack=e=>showRemote(remote,e.streams[0]);
   rtc.peer.onicecandidate=e=>{if(e.candidate)socket.emit("webrtc-ice",{candidate:e.candidate})};
   await rtc.peer.setRemoteDescription(desc);
+  // flush any ICE candidates that arrived before the peer was ready
+  for(const c of rtc.pendingICE){try{await rtc.peer.addIceCandidate(c)}catch(e){}}
+  rtc.pendingICE=[];
   const answer=await rtc.peer.createAnswer();
   await rtc.peer.setLocalDescription(answer);
   socket.emit("webrtc-answer",{desc:answer});
@@ -295,21 +294,39 @@ socket.on("webrtc-offer",p=>{
  guestAnswer(p&&p.desc);
  clearTimeout(window.retryCall);
 });
-
-// When a guest joins, they may arrive before or after the host started the call.
-// This lets a guest ask the host to (re)start the live video link.
-function guestRequestReconnect(){
- const v=$("gremote");
- if(isHost||!v||!v.classList.contains("hidden"))return; // already connected or not a guest
- socket.emit("guest-request-reconnect",{});
-}
-socket.on("guest-request-reconnect",()=>{ if(isHost&&!rtc.peer)hostMakeCall(); });
 socket.on("webrtc-answer",async p=>{
  if(!rtc.peer||!p||!p.desc)return;
  try{await rtc.peer.setRemoteDescription(p.desc);hostStatus.textContent="Live video connected!";}catch(e){hostStatus.textContent="⚠️ "+e.message;}
 });
 socket.on("webrtc-ice",async p=>{
- if(rtc.peer&&p&&p.candidate){try{await rtc.peer.addIceCandidate(p.candidate)}catch(e){}}
+ if(!rtc.peer||!p||!p.candidate)return;
+ try{await rtc.peer.addIceCandidate(p.candidate)}
+ catch(e){rtc.pendingICE.push(p.candidate)}
 });
+
+// Guest: ask the host to (re)start the live video link
+function guestRequestReconnect(){
+ const v=$("gremote");
+ if(isHost||!v||!v.classList.contains("hidden"))return;
+ socket.emit("guest-request-reconnect",{});
+}
+socket.on("guest-request-reconnect",()=>{ if(isHost)hostMakeCall(); });
+
+// When a guest joins, host initiates the call. Also retry periodically
+// in case the guest wasn't ready yet (camera not started, etc.)
+socket.on("participant-joined",p=>{
+ addPerson($("people"),p.id,p.name,p.host);
+ if($("gpeople"))addPerson($("gpeople"),p.id,p.name,p.host);
+ if(isHost){clearTimeout(window.retryCall);window.retryCall=setTimeout(hostMakeCall,300);}
+});
+socket.on("participant-left",p=>{const e=$("p-"+p.id);if(e)e.remove()});
+
+// Periodic retry: if live video isn't connected, ask the host to try again
+setInterval(()=>{
+ if(!isHost){
+  const v=$("gremote");
+  if(!v||v.classList.contains("hidden"))guestRequestReconnect();
+ }
+},5000);
 </script>
 </body></html>
