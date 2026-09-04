@@ -237,31 +237,25 @@ function cleanupPeer(){
 }
 async function ensureStream(){
  if(rtc.stream&&rtc.stream.active)return rtc.stream;
- const s=await navigator.mediaDevices.getUserMedia({video:true,audio:false});
- rtc.stream=s;
+ rtc.stream=await navigator.mediaDevices.getUserMedia({video:true,audio:false});
  const local=isHost?$("cam"):$("gcam");
- if(local&&!local.srcObject){local.srcObject=s;local.play().catch(()=>{})}
- return s;
+ if(local&&!local.srcObject){local.srcObject=rtc.stream;local.play().catch(()=>{})}
+ return rtc.stream;
 }
-function showRemote(el,stream){
- el.srcObject=stream;el.classList.remove("hidden");
-}
+function showRemote(el,stream){el.srcObject=stream;el.classList.remove("hidden")}
 function iceStatus(){
  const s=rtc.peer?rtc.peer.iceConnectionState:"none";
  const el=isHost?hostStatus:guestStatus;
  if(!el)return;
  if(s==="connected"||s==="completed")el.textContent="📹 Live video connected!";
- else if(s==="failed")el.textContent="⚠️ Could not connect video. Retrying...";
+ else if(s==="failed"){el.textContent="⚠️ Connection lost. Retrying...";cleanupPeer();}
  else if(s==="checking"||s==="new")el.textContent="Connecting live video...";
 }
-let calling=false;
 async function hostMakeCall(){
- if(calling)return;
- calling=true;
+ cleanupPeer();
  try{
-  cleanupPeer();
-  const remote=$("hremote");
   const stream=await ensureStream();
+  const remote=$("hremote");
   rtc.peer=new RTCPeerConnection(rtcConfig);
   rtc.peer.oniceconnectionstatechange=iceStatus;
   stream.getTracks().forEach(t=>rtc.peer.addTrack(t,stream));
@@ -270,71 +264,54 @@ async function hostMakeCall(){
   const offer=await rtc.peer.createOffer();
   await rtc.peer.setLocalDescription(offer);
   socket.emit("webrtc-offer",{desc:offer});
-  hostStatus.textContent="Connecting to guest (live video)...";
- }catch(err){hostStatus.textContent="⚠️ Live video error: "+err.message;}
- finally{calling=false}
+  hostStatus.textContent="Connecting to guest...";
+ }catch(err){cleanupPeer();hostStatus.textContent="⚠️ "+err.message;}
 }
 async function guestAnswer(desc){
  cleanupPeer();
- const remote=$("gremote");
  try{
   const stream=await ensureStream();
+  const remote=$("gremote");
   rtc.peer=new RTCPeerConnection(rtcConfig);
   rtc.peer.oniceconnectionstatechange=iceStatus;
   stream.getTracks().forEach(t=>rtc.peer.addTrack(t,stream));
   rtc.peer.ontrack=e=>showRemote(remote,e.streams[0]);
   rtc.peer.onicecandidate=e=>{if(e.candidate)socket.emit("webrtc-ice",{candidate:e.candidate})};
-  if(rtc.peer.signalingState!=="stable")return;
   await rtc.peer.setRemoteDescription(desc);
   for(const c of rtc.pendingICE){try{await rtc.peer.addIceCandidate(c)}catch(e){}}
   rtc.pendingICE=[];
   const answer=await rtc.peer.createAnswer();
   await rtc.peer.setLocalDescription(answer);
   socket.emit("webrtc-answer",{desc:answer});
-  guestStatus.textContent="Live video connecting...";
- }catch(err){guestStatus.textContent="⚠️ Live video error: "+err.message;}
+  guestStatus.textContent="Connecting to host...";
+ }catch(err){cleanupPeer();guestStatus.textContent="⚠️ "+err.message;}
 }
-let answering=false;
-socket.on("webrtc-offer",async p=>{
- if(answering||!p||!p.desc)return;
- if(rtc.peer&&rtc.peer.signalingState!=="stable")return;
- answering=true;
- try{await guestAnswer(p.desc);clearTimeout(window.retryCall);}catch(e){}finally{answering=false}
-});
+socket.on("webrtc-offer",p=>{if(p&&p.desc)guestAnswer(p.desc)});
 socket.on("webrtc-answer",async p=>{
  if(!rtc.peer||!p||!p.desc)return;
  if(rtc.peer.signalingState!=="have-local-offer")return;
- try{await rtc.peer.setRemoteDescription(p.desc);hostStatus.textContent="Live video connected!";}catch(e){hostStatus.textContent="⚠️ "+e.message;}
+ try{await rtc.peer.setRemoteDescription(p.desc);hostStatus.textContent="📹 Live video connected!";}catch(e){hostStatus.textContent="⚠️ "+e.message;}
 });
 socket.on("webrtc-ice",async p=>{
  if(!rtc.peer||!p||!p.candidate)return;
- try{await rtc.peer.addIceCandidate(p.candidate)}
- catch(e){rtc.pendingICE.push(p.candidate)}
+ try{await rtc.peer.addIceCandidate(p.candidate)}catch(e){rtc.pendingICE.push(p.candidate)}
 });
 
-// Guest: ask the host to (re)start the live video link
 function guestRequestReconnect(){
+ if(isHost)return;
  const v=$("gremote");
- if(isHost||!v||!v.classList.contains("hidden"))return;
+ if(v&&!v.classList.contains("hidden"))return;
  socket.emit("guest-request-reconnect",{});
 }
-socket.on("guest-request-reconnect",()=>{ if(isHost)hostMakeCall(); });
+socket.on("guest-request-reconnect",()=>{if(isHost)hostMakeCall()});
 
-// When a guest joins, host initiates the call. Also retry periodically
-// in case the guest wasn't ready yet (camera not started, etc.)
 socket.on("participant-joined",p=>{
  addPerson($("people"),p.id,p.name,p.host);
  if($("gpeople"))addPerson($("gpeople"),p.id,p.name,p.host);
- if(isHost){clearTimeout(window.retryCall);window.retryCall=setTimeout(hostMakeCall,300);}
+ if(isHost)setTimeout(hostMakeCall,300);
 });
 socket.on("participant-left",p=>{const e=$("p-"+p.id);if(e)e.remove()});
 
-// Periodic retry: if live video isn't connected, ask the host to try again
-setInterval(()=>{
- if(!isHost){
-  const v=$("gremote");
-  if(!v||v.classList.contains("hidden"))guestRequestReconnect();
- }
-},5000);
+setInterval(guestRequestReconnect,5000);
 </script>
 </body></html>
