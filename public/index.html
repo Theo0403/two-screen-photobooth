@@ -107,6 +107,7 @@ async function enableCam(v,btn,shotBtn,status,isGuest){
   const s=await navigator.mediaDevices.getUserMedia({video:true,audio:false});
   v.srcObject=s;btn.classList.add("hidden");if(shotBtn)shotBtn.classList.remove("hidden");status.textContent="Camera ready.";
   if(isGuest)gstream=s;
+  rtc.stream=s;
   const cleanup=()=>{try{s.getTracks().forEach(t=>t.stop())}catch(e){}};
   s.getTracks().forEach(t=>t.addEventListener("ended",cleanup));
  }catch(e){
@@ -239,8 +240,12 @@ const rtcConfig={
 
 async function ensureStream(){
  if(rtc.stream&&rtc.stream.active)return rtc.stream;
- rtc.stream=await navigator.mediaDevices.getUserMedia({video:true,audio:false});
- return rtc.stream;
+ const s=await navigator.mediaDevices.getUserMedia({video:true,audio:false});
+ rtc.stream=s;
+ // also display it in the right local preview
+ const local=isHost?$("cam"):$("gcam");
+ if(local&&!local.srcObject){local.srcObject=s;local.play().catch(()=>{})}
+ return s;
 }
 function showRemote(el,stream){
  el.srcObject=stream;el.classList.remove("hidden");
