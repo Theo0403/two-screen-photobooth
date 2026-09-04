@@ -9,10 +9,17 @@ const crypto = require("crypto");
 
 const app = express();
 
-const useHttps = process.env.SSL_KEY && process.env.SSL_CERT && fs.existsSync(process.env.SSL_KEY) && fs.existsSync(process.env.SSL_CERT);
-const server = useHttps
-  ? https.createServer({key: fs.readFileSync(process.env.SSL_KEY), cert: fs.readFileSync(process.env.SSL_CERT)}, app)
-  : http.createServer(app);
+let sslOptions;
+if (process.env.SSL_KEY && process.env.SSL_CERT && fs.existsSync(process.env.SSL_KEY) && fs.existsSync(process.env.SSL_CERT)) {
+  sslOptions = {key: fs.readFileSync(process.env.SSL_KEY), cert: fs.readFileSync(process.env.SSL_CERT)};
+} else {
+  const selfsigned = require("selfsigned");
+  const attrs = [{name:"commonName",value:"2-screen-photobooth"}];
+  const pems = selfsigned.generate(attrs, {days:365, algorithm:"sha256", extensions:[{name:"subjectAltName",altNames:[{type:2,value:"localhost"},{type:7,ip:"127.0.0.1"}]}]});
+  sslOptions = {key:pems.private, cert:pems.cert};
+  console.log("Auto-generated self-signed SSL certificate. Browser may show a warning — click Advanced > Proceed to continue.");
+}
+const server = https.createServer(sslOptions, app);
 const io = new Server(server);
 app.use(express.static("public"));
 
@@ -114,8 +121,6 @@ socket.on("webrtc-ice", payload => {
 
 const port = process.env.PORT || 3000;
 server.listen(port, () => {
-  const proto = useHttps ? "https" : "http";
-  console.log("2-screen photobooth running on port " + port + " (" + proto + ")");
   const addrs = [];
   const ifaces = os.networkInterfaces();
   for (const name of Object.keys(ifaces)) {
@@ -123,8 +128,7 @@ server.listen(port, () => {
       if (iface.family === "IPv4" && !iface.internal) addrs.push(iface.address);
     }
   }
-  console.log("Open on this PC:     " + proto + "://localhost:" + port);
-  console.log("Share with devices:  " + proto + "://" + (addrs[0] || "?") + ":" + port);
-  if (!useHttps && addrs[0])
-    console.log("NOTE: Camera only works in a secure context. Use https:// (set SSL_KEY/SSL_CERT) or localhost for camera access.");
+  console.log("2-screen photobooth running on port " + port + " (https)");
+  console.log("Open on this PC:     https://localhost:" + port);
+  console.log("Share with devices:  https://" + (addrs[0] || "?") + ":" + port);
 });
