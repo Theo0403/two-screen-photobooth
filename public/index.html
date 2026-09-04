@@ -13,6 +13,8 @@ h2{margin-top:0}.big{font-size:42px;font-weight:800;color:#e83e8c;letter-spacing
 input,button{width:100%;padding:13px;border-radius:12px;border:1px solid #ddd;margin:6px 0;font-size:15px}
 button{border:0;background:#e83e8c;color:white;font-weight:bold;cursor:pointer}.dark{background:#333}.light{background:#eee;color:#333}
 video{width:100%;aspect-ratio:16/10;object-fit:cover;background:#111;border-radius:16px;transform:scaleX(-1)}
+.vlabel{display:block;font-size:12px;color:#888;text-align:center;margin:6px 0 2px}
+.remote{width:100%;aspect-ratio:16/10;object-fit:cover;background:#222;border-radius:16px;transform:scaleX(-1)}
 #photo{width:100%;border-radius:16px;display:none}.status{text-align:center;min-height:20px;color:#777}
 .hidden{display:none}.count{position:fixed;inset:0;display:none;align-items:center;justify-content:center;font-size:130px;color:white;text-shadow:0 5px 25px #000;z-index:5}
 .people{display:flex;flex-wrap:wrap;gap:7px}.person{background:#f7d9e8;padding:7px 10px;border-radius:20px}
@@ -29,7 +31,10 @@ video{width:100%;aspect-ratio:16/10;object-fit:cover;background:#111;border-radi
 <div id="hostView" class="hidden">
   <p>Give this room code to everyone who wants to join:</p>
   <div class="big" id="code"></div>
+  <span class="vlabel">You (camera preview)</span>
   <video id="cam" autoplay playsinline></video>
+  <span class="vlabel">Connected guest</span>
+  <video id="hremote" class="remote hidden" autoplay playsinline></video>
   <button id="start">📷 Start Camera</button>
   <button id="shot" class="hidden">✨ Take Photo Strip</button>
   <div class="people" id="people"></div>
@@ -43,7 +48,10 @@ video{width:100%;aspect-ratio:16/10;object-fit:cover;background:#111;border-radi
 <input id="name" placeholder="Your name">
 <button id="join">Join Photobooth</button>
 <div id="guestView" class="hidden">
+  <span class="vlabel">You (camera preview)</span>
   <video id="gcam" autoplay playsinline></video>
+  <span class="vlabel">Connected host</span>
+  <video id="gremote" class="remote hidden" autoplay playsinline></video>
   <button id="gstart">📷 Start Camera</button>
   <p class="status" id="guestStatus"></p>
   <div class="people" id="gpeople"></div>
@@ -58,7 +66,7 @@ video{width:100%;aspect-ratio:16/10;object-fit:cover;background:#111;border-radi
 <script>
 const $=id=>document.getElementById(id);
 const secure=location.protocol==="https:"||location.hostname==="localhost"||location.hostname==="127.0.0.1";
-const socket=io();let stream,gstream,myName="Host";
+const socket=io();let stream,gstream,myName="Host",isHost=false;
 const hostStatus=$("hostStatus"),guestStatus=$("guestStatus");
 socket.on("connect_error",()=>{hostStatus.textContent=guestStatus.textContent="⚠️ Cannot reach the server. Make sure the server is running and you opened the correct address.";});
 function addPerson(list,id,name,isHost){const e=document.createElement("span");e.className="person";e.id="p-"+id;e.textContent=(isHost?"🖥️ ":"👤 ")+name;list.appendChild(e)}
@@ -69,6 +77,7 @@ $("create").onclick=()=>{
   btn.disabled=false;btn.textContent="Create Photobooth Room";
   if(!r||!r.room)return hostStatus.textContent="⚠️ Could not create room — connection problem.";
   $("create").classList.add("hidden");$("hostView").classList.remove("hidden");$("code").textContent=r.room;
+  isHost=true;
   addPerson($("people"),"me","Host (you)",true);
   hostStatus.textContent="Room created. Click Start Camera, then Take Photo Strip.";
  });
@@ -185,6 +194,8 @@ function hideCount(){$("count").style.display="none"}
 socket.on("participant-joined",p=>{
  addPerson($("people"),p.id,p.name,p.host);
  if($("gpeople"))addPerson($("gpeople"),p.id,p.name,p.host);
+ // host initiates the live video call when a guest joins
+ if(isHost&&!rtc.peer&&typeof hostMakeCall==="function"){setTimeout(hostMakeCall,300);}
 });
 socket.on("participant-left",p=>{const e=$("p-"+p.id);if(e)e.remove()});
 socket.on("countdown",n=>{showCount(n);clearTimeout(window.ct);window.ct=setTimeout(hideCount,900)});
@@ -208,5 +219,57 @@ socket.on("new-photo",p=>{
   guestStatus.textContent=(p.name?"📸 "+p.name+" took a photo strip":"New photo strip received!")+" 🎉";
 });
 socket.on("room-closed",()=>alert("The host closed the photobooth room."));
+
+// ---------- WebRTC live video (host <-> guest) ----------
+const rtc={peer:null, stream:null};
+const rtcConfig={iceServers:[{urls:"stun:stun.l.google.com:19302"},{urls:"stun:stun1.l.google.com:19302"}]};
+
+async function ensureStream(){
+ if(rtc.stream&&rtc.stream.active)return rtc.stream;
+ rtc.stream=await navigator.mediaDevices.getUserMedia({video:true,audio:false});
+ return rtc.stream;
+}
+function showRemote(el,stream){
+ el.srcObject=stream;el.classList.remove("hidden");
+}
+async function hostMakeCall(){
+ if(rtc.peer)return;
+ const remote=$("hremote");
+ try{
+  const stream=await ensureStream();
+  rtc.peer=new RTCPeerConnection(rtcConfig);
+  stream.getTracks().forEach(t=>rtc.peer.addTrack(t,stream));
+  rtc.peer.ontrack=e=>showRemote(remote,e.streams[0]);
+  rtc.peer.onicecandidate=e=>{if(e.candidate)socket.emit("webrtc-ice",{candidate:e.candidate})};
+  const offer=await rtc.peer.createOffer();
+  await rtc.peer.setLocalDescription(offer);
+  socket.emit("webrtc-offer",{desc:offer});
+  hostStatus.textContent="Connecting to guest...";
+ }catch(err){hostStatus.textContent="⚠️ Live video error: "+err.message;}
+}
+async function guestAnswer(desc){
+ if(rtc.peer)return;
+ const remote=$("gremote");
+ try{
+  const stream=await ensureStream();
+  rtc.peer=new RTCPeerConnection(rtcConfig);
+  stream.getTracks().forEach(t=>rtc.peer.addTrack(t,stream));
+  rtc.peer.ontrack=e=>showRemote(remote,e.streams[0]);
+  rtc.peer.onicecandidate=e=>{if(e.candidate)socket.emit("webrtc-ice",{candidate:e.candidate})};
+  await rtc.peer.setRemoteDescription(desc);
+  const answer=await rtc.peer.createAnswer();
+  await rtc.peer.setLocalDescription(answer);
+  socket.emit("webrtc-answer",{desc:answer});
+  guestStatus.textContent="Live video connected!";
+ }catch(err){guestStatus.textContent="⚠️ Live video error: "+err.message;}
+}
+socket.on("webrtc-offer",p=>{guestAnswer(p&&p.desc)});
+socket.on("webrtc-answer",async p=>{
+ if(!rtc.peer||!p||!p.desc)return;
+ try{await rtc.peer.setRemoteDescription(p.desc);hostStatus.textContent="Live video connected!";}catch(e){hostStatus.textContent="⚠️ "+e.message;}
+});
+socket.on("webrtc-ice",async p=>{
+ if(rtc.peer&&p&&p.candidate){try{await rtc.peer.addIceCandidate(p.candidate)}catch(e){}}
+});
 </script>
 </body></html>

@@ -77,6 +77,21 @@ io.on("connection", socket => {
     if (room) socket.to(room).emit("guest-frame", payload);
   });
 
+  socket.on("webrtc-offer", payload => {
+    const room = socket.data.room;
+    if (room) socket.to(room).emit("webrtc-offer", payload);
+  });
+
+  socket.on("webrtc-answer", payload => {
+    const room = socket.data.room;
+    if (room) socket.to(room).emit("webrtc-answer", payload);
+  });
+
+  socket.on("webrtc-ice", payload => {
+    const room = socket.data.room;
+    if (room) socket.to(room).emit("webrtc-ice", payload);
+  });
+
   socket.on("disconnect", () => {
     const room = socket.data.room;
     const data = rooms.get(room);
