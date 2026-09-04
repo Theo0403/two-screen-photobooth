@@ -222,7 +222,17 @@ socket.on("room-closed",()=>alert("The host closed the photobooth room."));
 
 // ---------- WebRTC live video (host <-> guest) ----------
 const rtc={peer:null, stream:null};
-const rtcConfig={iceServers:[{urls:"stun:stun.l.google.com:19302"},{urls:"stun:stun1.l.google.com:19302"}]};
+const rtcConfig={
+ iceServers:[
+  {urls:"stun:stun.l.google.com:19302"},
+  {urls:"stun:stun1.l.google.com:19302"},
+  {urls:"stun:openrelay.metered.ca:80"},
+  {urls:"turn:openrelay.metered.ca:80",username:"openrelayproject",credential:"openrelayproject"},
+  {urls:"turn:openrelay.metered.ca:443",username:"openrelayproject",credential:"openrelayproject"},
+  {urls:"turn:openrelay.metered.ca:443?transport=tcp",username:"openrelayproject",credential:"openrelayproject"},
+  {urls:"turns:openrelay.metered.ca:443?transport=tcp",username:"openrelayproject",credential:"openrelayproject"}
+ ]
+};
 
 async function ensureStream(){
  if(rtc.stream&&rtc.stream.active)return rtc.stream;
@@ -232,19 +242,28 @@ async function ensureStream(){
 function showRemote(el,stream){
  el.srcObject=stream;el.classList.remove("hidden");
 }
+function iceStatus(){
+ const s=rtc.peer?rtc.peer.iceConnectionState:"none";
+ const el=isHost?hostStatus:guestStatus;
+ if(!el)return;
+ if(s==="connected"||s==="completed")el.textContent="📹 Live video connected!";
+ else if(s==="failed")el.textContent="⚠️ Could not connect video (network blocked). Trying STUN/TURN...";
+ else if(s==="checking"||s==="new")el.textContent="Connecting live video...";
+}
 async function hostMakeCall(){
  if(rtc.peer)return;
  const remote=$("hremote");
  try{
   const stream=await ensureStream();
   rtc.peer=new RTCPeerConnection(rtcConfig);
+  rtc.peer.oniceconnectionstatechange=iceStatus;
   stream.getTracks().forEach(t=>rtc.peer.addTrack(t,stream));
   rtc.peer.ontrack=e=>showRemote(remote,e.streams[0]);
   rtc.peer.onicecandidate=e=>{if(e.candidate)socket.emit("webrtc-ice",{candidate:e.candidate})};
   const offer=await rtc.peer.createOffer();
   await rtc.peer.setLocalDescription(offer);
   socket.emit("webrtc-offer",{desc:offer});
-  hostStatus.textContent="Connecting to guest...";
+  hostStatus.textContent="Connecting to guest (live video)...";
  }catch(err){hostStatus.textContent="⚠️ Live video error: "+err.message;}
 }
 async function guestAnswer(desc){
@@ -253,6 +272,7 @@ async function guestAnswer(desc){
  try{
   const stream=await ensureStream();
   rtc.peer=new RTCPeerConnection(rtcConfig);
+  rtc.peer.oniceconnectionstatechange=iceStatus;
   stream.getTracks().forEach(t=>rtc.peer.addTrack(t,stream));
   rtc.peer.ontrack=e=>showRemote(remote,e.streams[0]);
   rtc.peer.onicecandidate=e=>{if(e.candidate)socket.emit("webrtc-ice",{candidate:e.candidate})};
@@ -260,7 +280,7 @@ async function guestAnswer(desc){
   const answer=await rtc.peer.createAnswer();
   await rtc.peer.setLocalDescription(answer);
   socket.emit("webrtc-answer",{desc:answer});
-  guestStatus.textContent="Live video connected!";
+  guestStatus.textContent="Live video connecting...";
  }catch(err){guestStatus.textContent="⚠️ Live video error: "+err.message;}
 }
 socket.on("webrtc-offer",p=>{guestAnswer(p&&p.desc)});
