@@ -1,0 +1,169 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>2-Screen Online Photobooth</title>
+<style>
+*{box-sizing:border-box}body{margin:0;font-family:Arial,sans-serif;background:linear-gradient(135deg,#fff0f6,#f2eaff);color:#333}
+header{text-align:center;padding:24px}h1{margin:0;color:#e83e8c}p{color:#777}
+.wrap{max-width:1050px;margin:auto;padding:15px}.grid{display:grid;grid-template-columns:1fr 1fr;gap:18px}
+.card{background:#fff;border-radius:22px;padding:22px;box-shadow:0 10px 35px #0001}
+h2{margin-top:0}.big{font-size:42px;font-weight:800;color:#e83e8c;letter-spacing:5px;text-align:center;margin:20px}
+input,button{width:100%;padding:13px;border-radius:12px;border:1px solid #ddd;margin:6px 0;font-size:15px}
+button{border:0;background:#e83e8c;color:white;font-weight:bold;cursor:pointer}.dark{background:#333}.light{background:#eee;color:#333}
+video{width:100%;aspect-ratio:16/10;object-fit:cover;background:#111;border-radius:16px;transform:scaleX(-1)}
+#photo{width:100%;border-radius:16px;display:none}.status{text-align:center;min-height:20px;color:#777}
+.hidden{display:none}.count{position:fixed;inset:0;display:none;align-items:center;justify-content:center;font-size:130px;color:white;text-shadow:0 5px 25px #000;z-index:5}
+.people{display:flex;flex-wrap:wrap;gap:7px}.person{background:#f7d9e8;padding:7px 10px;border-radius:20px}
+@media(max-width:800px){.grid{grid-template-columns:1fr}}
+</style>
+</head>
+<body>
+<header><h1>📸 2-Screen Online Photobooth</h1><p>Screen 1 = Host (create a room) • Screen 2 = Join with your own camera. Share the room code.</p></header>
+<div class="wrap"><div class="grid">
+
+<section class="card">
+<h2>🖥️ Screen 1 — Host</h2>
+<button id="create">Create Photobooth Room</button>
+<div id="hostView" class="hidden">
+  <p>Give this room code to everyone who wants to join:</p>
+  <div class="big" id="code"></div>
+  <video id="cam" autoplay playsinline></video>
+  <button id="start">📷 Start Camera</button>
+  <button id="shot" class="hidden">✨ Take Photo Strip</button>
+  <div class="people" id="people"></div>
+  <p class="status" id="hostStatus"></p>
+</div>
+</section>
+
+<section class="card">
+<h2>📱 Screen 2 — Join</h2>
+<input id="room" placeholder="Enter room code">
+<input id="name" placeholder="Your name">
+<button id="join">Join Photobooth</button>
+<div id="guestView" class="hidden">
+  <video id="gcam" autoplay playsinline></video>
+  <button id="gstart">📷 Start Camera</button>
+  <p class="status" id="guestStatus"></p>
+  <img id="photo" alt="Latest photobooth photo">
+  <button id="save" class="dark">⬇️ Save Photo</button>
+</div>
+</section>
+
+</div></div>
+<div class="count" id="count"></div>
+<script src="/socket.io/socket.io.js"></script>
+<script>
+const $=id=>document.getElementById(id);
+const secure=location.protocol==="https:"||location.hostname==="localhost"||location.hostname==="127.0.0.1";
+const socket=io();let stream,gstream,myName="Host";
+const hostStatus=$("hostStatus"),guestStatus=$("guestStatus");
+socket.on("connect_error",()=>{hostStatus.textContent=guestStatus.textContent="⚠️ Cannot reach the server. Make sure the server is running and you opened the correct address.";});
+
+$("create").onclick=()=>{
+ const btn=$("create");btn.disabled=true;btn.textContent="Creating...";
+ socket.emit("create-room",r=>{
+  btn.disabled=false;btn.textContent="Create Photobooth Room";
+  if(!r||!r.room)return hostStatus.textContent="⚠️ Could not create room — connection problem.";
+  $("create").classList.add("hidden");$("hostView").classList.remove("hidden");$("code").textContent=r.room;
+  hostStatus.textContent="Room created. Click Start Camera, then Take Photo.";
+ });
+};
+
+$("start").onclick=()=>enableCam($("cam"),$("start"),$("shot"),hostStatus);
+$("shot").onclick=()=>takePhoto($("cam"),"shot");
+
+$("join").onclick=()=>{
+ socket.emit("join-room",{room:$("room").value,name:$("name").value},r=>{
+  if(!r||!r.ok)return alert(r.error||"Cannot join room.");
+  myName=r.name||"Guest";
+  $("join").classList.add("hidden");$("room").classList.add("hidden");$("name").classList.add("hidden");
+  $("guestView").classList.remove("hidden");
+  guestStatus.textContent="Joined as "+r.name+" — you can preview your camera; the host controls the photos.";
+ });
+};
+$("gstart").onclick=()=>enableCam($("gcam"),$("gstart"),null,guestStatus);
+
+async function enableCam(v,btn,shotBtn,status){
+ if(!secure){status.textContent="⚠️ Camera blocked: open via https:// or localhost to get camera access.";return}
+ try{
+  const s=await navigator.mediaDevices.getUserMedia({video:true,audio:false});
+  v.srcObject=s;btn.classList.add("hidden");if(shotBtn)shotBtn.classList.remove("hidden");status.textContent="Camera ready.";
+  const cleanup=()=>{try{s.getTracks().forEach(t=>t.stop())}catch(e){}};
+  s.getTracks().forEach(t=>t.addEventListener("ended",cleanup));
+ }catch(e){
+  status.textContent=e.name==="NotAllowedError"?"❌ Camera permission denied — allow it and retry."
+   :(e.name==="NotFoundError"?"❌ No camera found."
+   :"❌ Camera error: "+e.message);
+ }
+}
+function takePhoto(v){
+ const local=v;
+ const SHOTS=4;
+ // each shot gets its own 3-2-1 countdown, then the flash
+ async function run(){
+  const frames=[];
+  for(let k=0;k<SHOTS;k++){
+   if(k>0)await new Promise(r=>setTimeout(r,400));
+   for(let i=3;i>0;i--){showCount(i);socket.emit("countdown",i);await new Promise(r=>setTimeout(r,900))}
+   showCount("📸");socket.emit("countdown","📸");await new Promise(r=>setTimeout(r,300));
+   frames.push(shoot());
+  }
+  hideCount();
+  const strip=compose(frames);
+  socket.emit("broadcast-photo",{data:strip,name:myName});
+ }
+ function shoot(){
+  const c=document.createElement("canvas");c.width=local.videoWidth;c.height=local.videoHeight;
+  const x=c.getContext("2d");x.translate(c.width,0);x.scale(-1,1);x.drawImage(local,0,0,c.width,c.height);
+  return c;
+ }
+ function compose(f){
+  const W=f[0].width,H=f[0].height,gap=14,pad=18,cardPad=8;
+  const rowH=H+cardPad*2+gap, stripW=W+cardPad*2+pad*2;
+  const footer=Math.round(W*0.28);
+  const total=pad*2+rowH*f.length+footer;
+  const c=document.createElement("canvas");c.width=stripW;c.height=total;
+  const x=c.getContext("2d");
+  const g=x.createLinearGradient(0,0,stripW,total);
+  g.addColorStop(0,"#ff9ecf");g.addColorStop(1,"#c9a3ff");
+  x.fillStyle=g;x.fillRect(0,0,stripW,total);
+  f.forEach((fr,i)=>{
+   const cy=pad+i*rowH;
+   x.save();x.shadowColor="rgba(0,0,0,.35)";x.shadowBlur=16;x.shadowOffsetY=6;
+   x.fillStyle="#fff";
+   x.beginPath();
+   x.moveTo(pad+12,cy);
+   x.arcTo(pad+stripW-pad*2,cy,pad+stripW-pad*2,cy+H+cardPad*2,10);
+   x.arcTo(pad+stripW-pad*2,cy+H+cardPad*2,pad,cy+H+cardPad*2,10);
+   x.arcTo(pad,cy+H+cardPad*2,pad,cy,10);
+   x.arcTo(pad,cy,pad+stripW-pad*2,cy,10);
+   x.fill();
+   x.restore();
+   x.save();x.beginPath();x.rect(pad+cardPad,cy+cardPad,W,H);x.clip();
+   x.drawImage(fr,pad+cardPad,cy+cardPad,W,H);x.restore();
+  });
+  x.fillStyle="#fff";x.font="bold "+Math.round(W*0.07)+"px Arial";x.textAlign="center";
+  x.shadowColor="rgba(0,0,0,.25)";x.shadowBlur=6;
+  x.fillText("✦ PHOTOBOOTH ✦",stripW/2,total-footer/2);
+  return c.toDataURL("image/jpeg",.9);
+ }
+ run().catch(e=>console.error(e));
+}
+function showCount(n){$("count").textContent=n;$("count").style.display="flex"}
+function hideCount(){$("count").style.display="none"}
+
+socket.on("participant-joined",p=>{
+ const e=document.createElement("span");e.className="person";e.id="p-"+p.id;e.textContent="👤 "+p.name;$("people").appendChild(e);
+});
+socket.on("participant-left",p=>{const e=$("p-"+p.id);if(e)e.remove()});
+socket.on("countdown",n=>{showCount(n);clearTimeout(window.ct);window.ct=setTimeout(hideCount,900)});
+socket.on("new-photo",p=>{
+ $("photo").src=p.data;$("photo").style.display="block";
+ $("save").onclick=()=>{const a=document.createElement("a");a.href=p.data;a.download="photobooth.jpg";a.click()};
+  guestStatus.textContent=(p.name?"📸 "+p.name+" took a photo strip":"New photo strip received!")+" 🎉";
+});
+socket.on("room-closed",()=>alert("The host closed the photobooth room."));
+</script>
+</body></html>
