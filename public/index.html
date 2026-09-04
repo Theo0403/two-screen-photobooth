@@ -46,6 +46,7 @@ video{width:100%;aspect-ratio:16/10;object-fit:cover;background:#111;border-radi
   <video id="gcam" autoplay playsinline></video>
   <button id="gstart">📷 Start Camera</button>
   <p class="status" id="guestStatus"></p>
+  <div class="people" id="gpeople"></div>
   <img id="photo" alt="Latest photobooth photo">
   <button id="save" class="dark">⬇️ Save Photo</button>
 </div>
@@ -60,6 +61,7 @@ const secure=location.protocol==="https:"||location.hostname==="localhost"||loca
 const socket=io();let stream,gstream,myName="Host";
 const hostStatus=$("hostStatus"),guestStatus=$("guestStatus");
 socket.on("connect_error",()=>{hostStatus.textContent=guestStatus.textContent="⚠️ Cannot reach the server. Make sure the server is running and you opened the correct address.";});
+function addPerson(list,id,name,isHost){const e=document.createElement("span");e.className="person";e.id="p-"+id;e.textContent=(isHost?"🖥️ ":"👤 ")+name;list.appendChild(e)}
 
 $("create").onclick=()=>{
  const btn=$("create");btn.disabled=true;btn.textContent="Creating...";
@@ -67,7 +69,8 @@ $("create").onclick=()=>{
   btn.disabled=false;btn.textContent="Create Photobooth Room";
   if(!r||!r.room)return hostStatus.textContent="⚠️ Could not create room — connection problem.";
   $("create").classList.add("hidden");$("hostView").classList.remove("hidden");$("code").textContent=r.room;
-  hostStatus.textContent="Room created. Click Start Camera, then Take Photo.";
+  addPerson($("people"),"me","Host (you)",true);
+  hostStatus.textContent="Room created. Click Start Camera, then Take Photo Strip.";
  });
 };
 
@@ -81,6 +84,7 @@ $("join").onclick=()=>{
   $("join").classList.add("hidden");$("room").classList.add("hidden");$("name").classList.add("hidden");
   $("guestView").classList.remove("hidden");
   guestStatus.textContent="Joined as "+r.name+" — you can preview your camera; the host controls the photos.";
+  if(r.members)r.members.forEach(p=>{addPerson($("gpeople"),p.id,p.name,p.host)});
  });
 };
 $("gstart").onclick=()=>enableCam($("gcam"),$("gstart"),null,guestStatus);
@@ -155,7 +159,8 @@ function showCount(n){$("count").textContent=n;$("count").style.display="flex"}
 function hideCount(){$("count").style.display="none"}
 
 socket.on("participant-joined",p=>{
- const e=document.createElement("span");e.className="person";e.id="p-"+p.id;e.textContent="👤 "+p.name;$("people").appendChild(e);
+ addPerson($("people"),p.id,p.name,p.host);
+ if($("gpeople"))addPerson($("gpeople"),p.id,p.name,p.host);
 });
 socket.on("participant-left",p=>{const e=$("p-"+p.id);if(e)e.remove()});
 socket.on("countdown",n=>{showCount(n);clearTimeout(window.ct);window.ct=setTimeout(hideCount,900)});

@@ -37,13 +37,16 @@ io.on("connection", socket => {
     room = String(room || "").toUpperCase();
     const data = rooms.get(room);
     if (!data) return cb({ok:false, error:"Room not found."});
+    const members = [];
+    for (const [id, nm] of data.users) { if (id !== socket.id) members.push({id, name:nm}); }
+    if (data.host !== socket.id) members.push({id:data.host, name:"Host", host:true});
     data.users.set(socket.id, name || "Guest");
     socket.join(room);
     socket.data.room = room;
     socket.data.role = "guest";
     socket.data.name = name || "Guest";
     socket.to(room).emit("participant-joined", {id:socket.id, name:socket.data.name});
-    cb({ok:true, room, name:socket.data.name});
+    cb({ok:true, room, name:socket.data.name, members});
   });
 
   socket.on("broadcast-photo", payload => {
