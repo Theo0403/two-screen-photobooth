@@ -74,7 +74,7 @@ $("create").onclick=()=>{
  });
 };
 
-$("start").onclick=()=>enableCam($("cam"),$("start"),$("shot"),hostStatus);
+$("start").onclick=()=>enableCam($("cam"),$("start"),$("shot"),hostStatus,false);
 $("shot").onclick=()=>takePhoto($("cam"),"shot");
 
 $("join").onclick=()=>{
@@ -87,13 +87,14 @@ $("join").onclick=()=>{
   if(r.members)r.members.forEach(p=>{addPerson($("gpeople"),p.id,p.name,p.host)});
  });
 };
-$("gstart").onclick=()=>enableCam($("gcam"),$("gstart"),null,guestStatus);
+$("gstart").onclick=()=>enableCam($("gcam"),$("gstart"),null,guestStatus,true);
 
-async function enableCam(v,btn,shotBtn,status){
+async function enableCam(v,btn,shotBtn,status,isGuest){
  if(!secure){status.textContent="⚠️ Camera blocked: open via https:// or localhost to get camera access.";return}
  try{
   const s=await navigator.mediaDevices.getUserMedia({video:true,audio:false});
   v.srcObject=s;btn.classList.add("hidden");if(shotBtn)shotBtn.classList.remove("hidden");status.textContent="Camera ready.";
+  if(isGuest)gstream=s;
   const cleanup=()=>{try{s.getTracks().forEach(t=>t.stop())}catch(e){}};
   s.getTracks().forEach(t=>t.addEventListener("ended",cleanup));
  }catch(e){
@@ -105,18 +106,41 @@ async function enableCam(v,btn,shotBtn,status){
 function takePhoto(v){
  const local=v;
  const SHOTS=4;
- // each shot gets its own 3-2-1 countdown, then the flash
+ window.collect={};
  async function run(){
   const frames=[];
   for(let k=0;k<SHOTS;k++){
    if(k>0)await new Promise(r=>setTimeout(r,400));
+   delete window.collect[k];
+   // request a guest frame for this shot (all guests snap now)
+   socket.emit("sync-shot",{index:k});
+   await new Promise(r=>setTimeout(r,550));
    for(let i=3;i>0;i--){showCount(i);socket.emit("countdown",i);await new Promise(r=>setTimeout(r,900))}
    showCount("📸");socket.emit("countdown","📸");await new Promise(r=>setTimeout(r,300));
-   frames.push(shoot());
+   const hostFrame=shoot();
+   const guestImg=await loadGuest(k);
+   frames.push(combine(hostFrame, guestImg));
+   hideCount();
   }
-  hideCount();
   const strip=compose(frames);
   socket.emit("broadcast-photo",{data:strip,name:myName});
+ }
+ function loadGuest(k){
+  return new Promise(res=>{
+   const d=window.collect[k];
+   if(!d)return res(null);
+   const img=new Image();img.onload=()=>res(img);img.onerror=()=>res(null);img.src=d;
+  });
+ }
+ // side-by-side combined frame: host left, guest right
+ function combine(h,g){
+  if(!g)return h;
+  const W=h.width,H=h.height,half=Math.round(W/2);
+  const c=document.createElement("canvas");c.width=W;c.height=H;const x=c.getContext("2d");
+  x.drawImage(h,0,0,half,H);
+  x.drawImage(g,half,0,W-half,H);
+  x.strokeStyle="#fff";x.lineWidth=3;x.beginPath();x.moveTo(half,0);x.lineTo(half,H);x.stroke();
+  return c;
  }
  function shoot(){
   const c=document.createElement("canvas");c.width=local.videoWidth;c.height=local.videoHeight;
@@ -164,6 +188,20 @@ socket.on("participant-joined",p=>{
 });
 socket.on("participant-left",p=>{const e=$("p-"+p.id);if(e)e.remove()});
 socket.on("countdown",n=>{showCount(n);clearTimeout(window.ct);window.ct=setTimeout(hideCount,900)});
+
+// GUEST: when the host snapshots, capture and send our camera frame
+socket.on("sync-shot",payload=>{
+ const v=$("gcam");
+ if(!gstream||!v||!v.videoWidth)return;
+ const c=document.createElement("canvas");c.width=v.videoWidth;c.height=v.videoHeight;
+ const x=c.getContext("2d");x.translate(c.width,0);x.scale(-1,1);x.drawImage(v,0,0,c.width,c.height);
+ socket.emit("guest-frame",{index:payload&&payload.index,data:c.toDataURL("image/jpeg",.7)});
+});
+
+// HOST: collect guest frames per shot index
+socket.on("guest-frame",p=>{
+ if(window.collect){const i=(p&&p.index!=null)?p.index:0;window.collect[i]=p.data;}
+});
 socket.on("new-photo",p=>{
  $("photo").src=p.data;$("photo").style.display="block";
  $("save").onclick=()=>{const a=document.createElement("a");a.href=p.data;a.download="photobooth.jpg";a.click()};

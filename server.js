@@ -67,6 +67,16 @@ io.on("connection", socket => {
     if (room) io.to(room).emit("countdown", n);
   });
 
+  socket.on("sync-shot", payload => {
+    const room = socket.data.room;
+    if (room) socket.to(room).emit("sync-shot", payload);
+  });
+
+  socket.on("guest-frame", payload => {
+    const room = socket.data.room;
+    if (room) socket.to(room).emit("guest-frame", payload);
+  });
+
   socket.on("disconnect", () => {
     const room = socket.data.room;
     const data = rooms.get(room);
