@@ -93,7 +93,7 @@ $("join").onclick=()=>{
   $("join").classList.add("hidden");$("room").classList.add("hidden");$("name").classList.add("hidden");
   $("guestView").classList.remove("hidden");
   guestStatus.textContent="Joined as "+r.name+" — you can preview your camera; the host controls the photos.";
-  if(r.members)r.members.forEach(p=>{addPerson($("gpeople"),p.id,p.name,p.host)});
+  if(r.members)r.members.forEach(p=>{ if(!p.host) addPerson($("gpeople"),p.id,p.name,p.host); });
  });
 };
 $("gstart").onclick=()=>enableCam($("gcam"),$("gstart"),null,guestStatus,true);
