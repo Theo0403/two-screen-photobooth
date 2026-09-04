@@ -254,10 +254,13 @@ function iceStatus(){
  else if(s==="failed")el.textContent="⚠️ Could not connect video. Retrying...";
  else if(s==="checking"||s==="new")el.textContent="Connecting live video...";
 }
+let calling=false;
 async function hostMakeCall(){
- cleanupPeer();
- const remote=$("hremote");
+ if(calling)return;
+ calling=true;
  try{
+  cleanupPeer();
+  const remote=$("hremote");
   const stream=await ensureStream();
   rtc.peer=new RTCPeerConnection(rtcConfig);
   rtc.peer.oniceconnectionstatechange=iceStatus;
@@ -269,6 +272,7 @@ async function hostMakeCall(){
   socket.emit("webrtc-offer",{desc:offer});
   hostStatus.textContent="Connecting to guest (live video)...";
  }catch(err){hostStatus.textContent="⚠️ Live video error: "+err.message;}
+ finally{calling=false}
 }
 async function guestAnswer(desc){
  cleanupPeer();
@@ -280,8 +284,8 @@ async function guestAnswer(desc){
   stream.getTracks().forEach(t=>rtc.peer.addTrack(t,stream));
   rtc.peer.ontrack=e=>showRemote(remote,e.streams[0]);
   rtc.peer.onicecandidate=e=>{if(e.candidate)socket.emit("webrtc-ice",{candidate:e.candidate})};
+  if(rtc.peer.signalingState!=="stable")return;
   await rtc.peer.setRemoteDescription(desc);
-  // flush any ICE candidates that arrived before the peer was ready
   for(const c of rtc.pendingICE){try{await rtc.peer.addIceCandidate(c)}catch(e){}}
   rtc.pendingICE=[];
   const answer=await rtc.peer.createAnswer();
@@ -290,12 +294,16 @@ async function guestAnswer(desc){
   guestStatus.textContent="Live video connecting...";
  }catch(err){guestStatus.textContent="⚠️ Live video error: "+err.message;}
 }
-socket.on("webrtc-offer",p=>{
- guestAnswer(p&&p.desc);
- clearTimeout(window.retryCall);
+let answering=false;
+socket.on("webrtc-offer",async p=>{
+ if(answering||!p||!p.desc)return;
+ if(rtc.peer&&rtc.peer.signalingState!=="stable")return;
+ answering=true;
+ try{await guestAnswer(p.desc);clearTimeout(window.retryCall);}catch(e){}finally{answering=false}
 });
 socket.on("webrtc-answer",async p=>{
  if(!rtc.peer||!p||!p.desc)return;
+ if(rtc.peer.signalingState!=="have-local-offer")return;
  try{await rtc.peer.setRemoteDescription(p.desc);hostStatus.textContent="Live video connected!";}catch(e){hostStatus.textContent="⚠️ "+e.message;}
 });
 socket.on("webrtc-ice",async p=>{
